@@ -1,0 +1,16 @@
+# Example configuration for LLMServer
+# Copy this file to config.yaml and edit as needed
+
+server:
+  port: 27776
+  debug: false
+  host: 0.0.0.0
+
+model:
+  n_ctx: 4096
+  n_threads: 16
+  n_gpu_layers: -1
+  verbose: false
+
+defaults:
+  prompts_path: prompts.yaml
