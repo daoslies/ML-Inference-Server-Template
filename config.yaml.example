@@ -1,4 +1,4 @@
-# Example configuration for LLMServer
+# Example configuration for ML__Inference_Server_Template
 # Copy this file to config.yaml and edit as needed
 
 server:
