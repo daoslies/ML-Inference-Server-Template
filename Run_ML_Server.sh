@@ -1,6 +1,14 @@
 #!/bin/bash
 set -e
 
+# --- Ensure script is run from its own directory ---
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ "$PWD" != "$SCRIPT_DIR" ]; then
+    echo -e "\033[1;33m[info]\033[0m Changing to script directory: $SCRIPT_DIR"
+    cd "$SCRIPT_DIR"
+    exec bash "$SCRIPT_DIR/$(basename "$0")" "$@"
+fi
+
 # -------------------------------------------------------
 # Run_ML_Server.sh — single entrypoint for ml_server_template
 #
