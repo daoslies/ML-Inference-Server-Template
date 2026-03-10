@@ -54,13 +54,15 @@ def load_config(path=CONFIG_PATH):
     with open(path, 'r') as f:
         return yaml.safe_load(f)
 
+from llm_backends import VLLMBackend, LlamaCppBackend
 
 class LLMServer:
     def __init__(self):
         self.config = load_config()
         self.app = Flask(__name__)
-        self.current_model = None
+        self.current_backend = None
         self.current_model_path = None
+        self.current_backend_name = None
         self.model_lock = Lock()
         self.register_routes()
         self.this_dir = os.path.dirname(os.path.abspath(__file__))
@@ -70,35 +72,19 @@ class LLMServer:
         )
         self.model_config = self.config.get('model', {})
 
-    def load_model(self, model_path: str) -> LLM:
-        """Load a model using vLLM. model_path can be a HF repo ID or local directory."""
-        return LLM(
-            model=model_path,
-            max_model_len=self.model_config.get('n_ctx', 4096),
-            gpu_memory_utilization=self.model_config.get('gpu_memory_utilization', 0.90),
-            tensor_parallel_size=self.model_config.get('tensor_parallel_size', 1),
-            trust_remote_code=self.model_config.get('trust_remote_code', False),
-        )
+    def _try_load_backend(self, backend_cls, model_path):
+        backend = backend_cls()
+        backend.load_model(model_path, self.model_config)
+        return backend
 
-    def unload_model(self, llm: LLM):
-        """Best-effort unload — frees the Python object and flushes CUDA cache."""
-        if llm is not None:
-            del llm
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
-    def load_prompts(self, yaml_path: str):
-        with open(yaml_path, 'r') as f:
-            return yaml.safe_load(f)
-
-    def _build_sampling_params(self, data: dict) -> SamplingParams:
-        return SamplingParams(
-            max_tokens=data.get('max_tokens', 256),
-            temperature=data.get('temperature', 0.3),
-            top_p=data.get('top_p', 0.95),
-            stop=data.get('stop', None),
-        )
+    def _build_sampling_params(self, data: dict):
+        # Returns a dict for llama-cpp, or SamplingParams for vLLM
+        return {
+            'max_tokens': data.get('max_tokens', 256),
+            'temperature': data.get('temperature', 0.3),
+            'top_p': data.get('top_p', 0.95),
+            'stop': data.get('stop', None),
+        }
 
     def register_routes(self):
         app = self.app
@@ -107,8 +93,9 @@ class LLMServer:
         def health_check():
             return jsonify({
                 'status': 'ok',
-                'model_loaded': self.current_model is not None,
-                'model_path': self.current_model_path,
+                'model_loaded': self.current_backend is not None,
+                'model_path': self.current_model_path if self.current_backend is not None else None,
+                'backend': self.current_backend_name,
             })
 
         @app.route('/checkcwd', methods=['POST', 'GET'])
@@ -129,70 +116,81 @@ class LLMServer:
             data = request.get_json()
             if not data or 'model_path' not in data:
                 return jsonify({'error': 'model_path is required'}), 400
-
             model_path = data['model_path']
             print(f"Loading model: {model_path}")
-
-            # Allow HF repo IDs (contain '/') as well as local paths
-            if not os.path.exists(model_path) and '/' not in model_path:
-                return jsonify({'error': f'Model not found: {model_path}'}), 404
-
-            try:
-                with self.model_lock:
-                    if self.current_model is not None:
-                        self.unload_model(self.current_model)
-                        self.current_model = None
-                    self.current_model = self.load_model(model_path)
-                    self.current_model_path = model_path
-
+            with self.model_lock:
+                # Only unload current model if new one loads successfully
+                backend = None
+                backend_name = None
+                error_msgs = []
+                try:
+                    backend = self._try_load_backend(VLLMBackend, model_path)
+                    backend_name = 'vllm'
+                except Exception as e:
+                    error_msgs.append(f"vLLM failed: {e}")
+                    try:
+                        backend = self._try_load_backend(LlamaCppBackend, model_path)
+                        backend_name = 'llama-cpp'
+                    except Exception as e2:
+                        error_msgs.append(f"llama-cpp failed: {e2}")
+                        if not (os.path.exists(model_path) or '/' in model_path):
+                            code = 404
+                        else:
+                            code = 500
+                        return jsonify({'error': 'Both backends failed', 'details': error_msgs}), code
+                # Only here if new model loaded successfully
+                if self.current_backend is not None:
+                    self.current_backend.unload_model()
+                self.current_backend = backend
+                self.current_backend_name = backend_name
+                self.current_model_path = model_path
+                msg = f"Model loaded with backend: {backend_name}"
+                if error_msgs:
+                    msg += f" (fallback used, errors: {error_msgs})"
                 return jsonify({
                     'status': 'success',
-                    'message': f'Model loaded: {model_path}',
+                    'message': msg,
+                    'backend': backend_name,
                 })
-            except Exception as e:
-                return jsonify({'error': str(e)}), 500
 
         @app.route('/unload_model', methods=['POST'])
         def unload_model_endpoint():
             try:
                 with self.model_lock:
-                    if self.current_model is None:
-                        return jsonify({'message': 'No model loaded'}), 200
-                    self.unload_model(self.current_model)
-                    self.current_model = None
+                    if self.current_backend is None:
+                        return jsonify({'status': 'success', 'message': 'No model loaded'}), 200
+                    self.current_backend.unload_model()
+                    self.current_backend = None
                     self.current_model_path = None
+                    self.current_backend_name = None
                 return jsonify({
                     'status': 'success',
-                    'message': 'Model unloaded (restart process for full VRAM reclaim)'
+                    'message': 'Model unloaded',
                 })
             except Exception as e:
                 return jsonify({'error': str(e)}), 500
 
         @app.route('/extract_names', methods=['POST'])
         def extract_names_endpoint():
-            if self.current_model is None:
+            if self.current_backend is None:
                 return jsonify({'error': 'No model loaded. Please load a model first.'}), 400
-
             data = request.get_json()
             if not data or 'text' not in data:
                 return jsonify({'error': 'text is required'}), 400
-
             text = data['text']
             prompts_path = data.get('prompts_path', self.default_prompts_path)
-
             if not os.path.exists(prompts_path):
                 return jsonify({'error': f'Prompts file not found: {prompts_path}'}), 404
-
             try:
                 with self.model_lock:
-                    names = extract_names(text, self.current_model, prompts_path)
-                return jsonify({'status': 'success', 'names': names})
+                    names = extract_names(text, self.current_backend.llm, prompts_path)
+                return jsonify({'status': 'success', 'names': names, 'backend': self.current_backend_name})
             except Exception as e:
-                return jsonify({'error': str(e)}), 500
+                return jsonify({'error': str(e), 'backend': self.current_backend_name}), 500
 
         @app.route('/inference', methods=['POST'])
         def inference_endpoint():
-            if self.current_model is None:
+            if self.current_backend is None:
                 return jsonify({'error': 'No model loaded. Please load a model first.'}), 400
 
             data = request.get_json()
@@ -206,26 +204,37 @@ class LLMServer:
 
             try:
                 with self.model_lock:
-                    outputs = self.current_model.generate(prompts, sampling_params)
-
-                results = [
-                    {
-                        'index': i,
-                        'response': output.outputs[0].text.strip(),
-                        'finish_reason': output.outputs[0].finish_reason,
-                        'prompt_tokens': len(output.prompt_token_ids),
-                        'completion_tokens': len(output.outputs[0].token_ids),
-                    }
-                    for i, output in enumerate(outputs)
-                ]
-
+                    results = self.current_backend.generate(prompts, sampling_params)
+                # vLLM returns list of objects with .outputs, llama-cpp returns list of dicts
+                if self.current_backend_name == 'vllm':
+                    results = [
+                        {
+                            'index': i,
+                            'response': output.outputs[0].text.strip(),
+                            'finish_reason': output.outputs[0].finish_reason,
+                            'prompt_tokens': len(output.prompt_token_ids),
+                            'completion_tokens': len(output.outputs[0].token_ids),
+                        }
+                        for i, output in enumerate(results)
+                    ]
+                else:
+                    # llama-cpp already returns a list of dicts
+                    for i, r in enumerate(results):
+                        r['index'] = i
                 return jsonify({
                     'status': 'success',
-                    # Single prompt → single object; list → list
+                    'backend': self.current_backend_name,
                     'results': results if isinstance(prompt_input, list) else results[0],
                 })
             except Exception as e:
-                return jsonify({'error': str(e)}), 500
+                import traceback
+                tb = traceback.format_exc()
+                print(f"[inference error] {e}\n{tb}")
+                return jsonify({'error': str(e), 'traceback': tb, 'backend': self.current_backend_name}), 500
+
+    def load_prompts(self, yaml_path: str):
+        with open(yaml_path, 'r') as f:
+            return yaml.safe_load(f)
 
     def run(self):
         self.app.run(
@@ -234,7 +243,6 @@ class LLMServer:
             debug=self.config['server'].get('debug', False),
             threaded=True
         )
-
 
 if __name__ == '__main__':
     server = LLMServer()

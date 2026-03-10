@@ -1,4 +1,5 @@
 # Ignore config and Python cache files
 config.yaml
 *.pyc
+*.log
 __pycache__/
