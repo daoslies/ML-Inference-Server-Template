@@ -252,8 +252,83 @@ else
 fi
 
 # -------------------------------------------------------
-# PHASE 3: Serve
+# PHASE 3: Serve (via tmux)
 # -------------------------------------------------------
 section "SERVER"
-info "Starting server..."
-exec python3 server.py
+
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ML_PY="$PROJECT_DIR/ml.py"
+
+# --- Ensure tmux is available ---
+if ! command -v tmux &> /dev/null; then
+    warning "tmux not found — attempting to install..."
+    if command -v apt-get &> /dev/null; then
+        sudo apt-get install -y tmux || error "Failed to install tmux via apt. Please install it manually."
+    elif command -v brew &> /dev/null; then
+        brew install tmux || error "Failed to install tmux via brew. Please install it manually."
+    else
+        error "Could not install tmux automatically. Please install it and re-run."
+    fi
+    info "tmux installed."
+fi
+
+# --- Ensure ml.py exists ---
+[ -f "$ML_PY" ] || error "ml.py not found at $ML_PY — please add it to the project directory."
+
+TMUX_SESSION="ml_server"
+
+# Kill any leftover session with the same name
+( tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true )
+
+# Write a minimal per-pane rc file so 'ml' works without touching .bashrc.
+# It activates the venv and defines ml as a function scoped to this session.
+ML_RC=$(mktemp /tmp/ml_rc.XXXXXX)
+cat > "$ML_RC" << EOF
+# Auto-sourced by ml_server tmux session — not a permanent change to your shell.
+source "$VENV_DIR/bin/activate"
+ml() { python "$ML_PY" "\$@"; }
+export -f ml
+
+# Welcome message
+echo ""
+echo -e "\033[1m\033[0;36m  ML Inference Server — interactive shell\033[0m"
+echo ""
+echo -e "  \033[1mCommands:\033[0m"
+echo -e "    ml health"
+echo -e "    ml load <model_path>"
+echo -e "    ml infer \"<prompt>\"  [--max-tokens N]  [--temperature F]"
+echo -e "    ml batch \"<p1>\" \"<p2>\" ...  [--max-tokens N]"
+echo -e "    ml extract \"<text>\" <prompts_path>"
+echo -e "    ml shell   \033[2m# interactive REPL\033[0m"
+echo ""
+EOF
+
+# Build the session:
+#   Pane 0 (left)  — server logs
+#   Pane 1 (right) — ml interactive shell
+tmux new-session -d -s "$TMUX_SESSION" -x "220" -y "50"
+
+# Left pane: run the server
+tmux send-keys -t "$TMUX_SESSION:0.0" \
+    "source '$VENV_DIR/bin/activate' && python3 '$PROJECT_DIR/server.py'" Enter
+
+# Split vertically (left/right), start the ml shell in the right pane
+tmux split-window -h -t "$TMUX_SESSION:0"
+tmux send-keys -t "$TMUX_SESSION:0.1" "source '$ML_RC' && rm -f '$ML_RC'" Enter
+
+# Give the left pane 40% of the width
+tmux resize-pane -t "$TMUX_SESSION:0.0" -x "40%"
+
+# Focus the right (ml shell) pane so the user lands there
+tmux select-pane -t "$TMUX_SESSION:0.1"
+
+info "Attaching to tmux session '$TMUX_SESSION'..."
+info "  Left pane : server logs"
+info "  Right pane: ml shell (ready to use)"
+echo ""
+echo -e "  ${DIM}Tip: Ctrl-B D to detach and leave the server running.${NC}"
+echo -e "       Ctrl-B X to kill the session (and server)."
+echo -e "       bash Kill_ML_Server.sh to kill from outside tmux."
+echo ""
+
+exec tmux attach-session -t "$TMUX_SESSION"

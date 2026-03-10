@@ -20,6 +20,26 @@ rm -rf ~/venvs/ml_server_template
 ```
 
 
+## Command-line client (ml.py)
+
+A simple CLI for interacting with the server is provided as `ml.py`:
+
+```bash
+chmod +x ml.py
+alias ml="python ml.py"  # (optional, add to your .bashrc)
+```
+
+Example usage:
+
+- `ml health` — check server status
+- `ml load Qwen/Qwen2.5-7B-Instruct` — load a model
+- `ml infer "Summarize this..."` — run inference
+- `ml batch "Prompt one" "Prompt two"` — batch inference
+- `ml extract "Alice and Bob met..." prompts.yaml` — extract names
+- `ml shell` — interactive REPL
+
+The CLI reads the port from `config.yaml` by default, and prints clean, colorized output.
+
 
 ## TO_DO
 

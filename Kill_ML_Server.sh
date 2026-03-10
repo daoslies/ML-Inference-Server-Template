@@ -1,0 +1,1 @@
+tmux kill-session -t ml_server 2>/dev/null || true
