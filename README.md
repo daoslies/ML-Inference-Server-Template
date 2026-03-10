@@ -36,3 +36,5 @@ rm -rf ~/venvs/ml_server_template
 -- It's gone a bit messy in the run_ml_server testing section. 
 
 -- Sort that out and you'll be good.
+
+-- run_ml_server is now clean and works with both vllm and llamacpp
