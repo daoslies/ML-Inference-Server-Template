@@ -2,22 +2,22 @@
 
 ## To Run
 
-` ` ` 
+```
 
 bash Run_ML_Server.sh
 
-` ` ` 
+```
 
 this'll make a venv and deal with your dependencies
 
 
 ## To Uninstall
 
-` ` ` 
+```
 
 rm -rf ~/venvs/ml_server_template
 
-` ` ` 
+```
 
 
 
