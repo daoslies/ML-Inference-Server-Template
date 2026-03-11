@@ -41,6 +41,29 @@ Example usage:
 The CLI reads the port from `config.yaml` by default, and prints clean, colorized output.
 
 
+## llama-server Backend (Qwen3.5 and future models)
+
+This server now uses the official [llama-server](https://github.com/ggerganov/llama.cpp/tree/master/examples/server) binary for all llama.cpp-based models (including Qwen3.5). The legacy `llama-cpp-python` and custom .so logic has been removed.
+
+### Configuration
+
+Edit `config.yaml` (or copy from `config.yaml.example`) and set:
+
+```yaml
+llama_cpp:
+  server_bin: /absolute/path/to/llama-server  # Path to the llama-server binary (required)
+  server_port: 8000                           # Port for llama-server to listen on (required)
+```
+
+- The server will launch `llama-server` as a subprocess and connect to it for inference.
+- `LD_LIBRARY_PATH` is set automatically based on the binary location.
+- No Python bindings or custom .so builds are required.
+
+### Requirements
+- `llama-cpp-python` is no longer needed and has been removed from `requirements.txt`.
+- Only `vllm` and other core dependencies remain.
+
+
 ## TO_DO
 
 - Sort out gittable venv setup so the server can run models reliably in any environment.
@@ -58,3 +81,6 @@ The CLI reads the port from `config.yaml` by default, and prints clean, colorize
 -- Sort that out and you'll be good.
 
 -- run_ml_server is now clean and works with both vllm and llamacpp
+
+
+--- Hmmm, if you try and load a model and you run out of vram, there is currently no warning that that's what happened. The server just fails to load the model and doesn't give a clear error message.

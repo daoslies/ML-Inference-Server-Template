@@ -14,3 +14,7 @@ model:
 
 defaults:
   prompts_path: prompts.yaml
+
+llama_cpp:
+  server_bin: /absolute/path/to/llama-server  # Path to the llama-server binary (required to use gguf)
+  server_port: 8000                           # Port for llama-server to listen on (required to use gguf)

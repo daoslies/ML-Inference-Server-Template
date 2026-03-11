@@ -108,6 +108,15 @@ fi
 
 SENTINEL="$VENV_DIR/.install_complete"
 
+# --- llama.cpp custom build integration (ARCH-2026-004) ---
+# [REMOVED: All legacy llama-cpp-python and custom .so logic]
+
+# Activate venv early so pip is available for rebuilds
+# (This is safe even if not first run)
+if [ -d "$VENV_DIR" ]; then
+    source "$VENV_DIR/bin/activate"
+fi
+
 if [ ! -f "$SENTINEL" ]; then
     [ -d "$VENV_DIR" ] && { warning "Incomplete install detected — cleaning up..."; rm -rf "$VENV_DIR"; }
 
@@ -166,6 +175,17 @@ else
     info "Environment ready. Checking for updated requirements..."
     pip install --upgrade --requirement "$REQUIREMENTS" --quiet
     info "Requirements are up to date."
+fi
+
+# --- llama.cpp server integration (ARCH-2026-005) ---
+LLAMA_SERVER_BIN=$(python3 -c \
+  "import yaml; c=yaml.safe_load(open('config.yaml')); \
+   print(c.get('llama_cpp',{}).get('server_bin',''))" 2>/dev/null || true)
+
+if [ -n "$LLAMA_SERVER_BIN" ]; then
+    LLAMA_LIB_DIR="$(dirname "$LLAMA_SERVER_BIN")"
+    export LD_LIBRARY_PATH="$LLAMA_LIB_DIR:${LD_LIBRARY_PATH:-}"
+    info "Added $LLAMA_LIB_DIR to LD_LIBRARY_PATH for llama.cpp libraries."
 fi
 
 # -------------------------------------------------------

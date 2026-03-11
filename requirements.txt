@@ -4,5 +4,4 @@ pytest
 requests
 #torch  vllm installs this for us.
 vllm
-llama-cpp-python
 ## important blank line. Genuinly is, plz don't delete.
