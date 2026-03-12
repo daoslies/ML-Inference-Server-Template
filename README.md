@@ -64,6 +64,64 @@ llama_cpp:
 - Only `vllm` and other core dependencies remain.
 
 
+## Quick API Examples (curl & Python)
+
+### curl
+
+```bash
+# 1) Health
+curl -s http://localhost:{PORT}/health
+
+# 2) Load model
+curl -X POST http://localhost:{PORT}/load_model \
+  -H "Content-Type: application/json" \
+  -d '{"model_path":"Qwen/Qwen2.5-7B-Instruct"}'
+
+# 3) Inference
+curl -X POST http://localhost:{PORT}/inference \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"Summarize this...","max_tokens":150}'
+
+# 4) Batch inference
+curl -X POST http://localhost:{PORT}/inference \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":["Prompt one","Prompt two"],"max_tokens":150}'
+
+# 5) Extract names
+curl -X POST http://localhost:{PORT}/extract_names \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Alice and Bob...","prompts_path":"textflow/prompts.yaml"}'
+```
+
+### Python (requests)
+
+```python
+import requests
+
+PORT = 27776  # or your configured port
+
+# 1) Health
+resp = requests.get(f"http://localhost:{PORT}/health")
+print(resp.json())
+
+# 2) Load model
+resp = requests.post(f"http://localhost:{PORT}/load_model", json={"model_path": "Qwen/Qwen2.5-7B-Instruct"})
+print(resp.json())
+
+# 3) Inference
+resp = requests.post(f"http://localhost:{PORT}/inference", json={"prompt": "Summarize this...", "max_tokens": 150})
+print(resp.json())
+
+# 4) Batch inference
+resp = requests.post(f"http://localhost:{PORT}/inference", json={"prompt": ["Prompt one", "Prompt two"], "max_tokens": 150})
+print(resp.json())
+
+# 5) Extract names
+resp = requests.post(f"http://localhost:{PORT}/extract_names", json={"text": "Alice and Bob...", "prompts_path": "textflow/prompts.yaml"})
+print(resp.json())
+```
+
+
 ## TO_DO
 
 - Sort out gittable venv setup so the server can run models reliably in any environment.

@@ -29,6 +29,30 @@ Quick curl examples:
       -H "Content-Type: application/json" \
       -d '{"text":"Alice and Bob...","prompts_path":"textflow/prompts.yaml"}'
 
+Quick Python requests examples:
+
+import requests
+
+# 1) Health
+resp = requests.get(f"http://localhost:{{PORT}}/health")
+print(resp.json())
+
+# 2) Load model
+resp = requests.post(f"http://localhost:{{PORT}}/load_model", json={"model_path": "Qwen/Qwen2.5-7B-Instruct"})
+print(resp.json())
+
+# 3) Inference
+resp = requests.post(f"http://localhost:{{PORT}}/inference", json={"prompt": "Summarize this...", "max_tokens": 150})
+print(resp.json())
+
+# 4) Batch inference
+resp = requests.post(f"http://localhost:{{PORT}}/inference", json={"prompt": ["Prompt one", "Prompt two"], "max_tokens": 150})
+print(resp.json())
+
+# 5) Extract names
+resp = requests.post(f"http://localhost:{{PORT}}/extract_names", json={"text": "Alice and Bob...", "prompts_path": "textflow/prompts.yaml"})
+print(resp.json())
+
 Notes on load/unload vs llama.cpp version:
 - vLLM initialises the full model on /load_model and holds it in GPU memory.
 - /unload_model deletes the LLM object and flushes CUDA cache, but vLLM does
@@ -73,9 +97,21 @@ class LLMServer:
         self.model_config = self.config.get('model', {})
 
     def _try_load_backend(self, backend_cls, model_path):
-        backend = backend_cls()
-        backend.load_model(model_path, self.model_config)
-        return backend
+        import traceback
+        try:
+            backend = backend_cls()
+            backend.load_model(model_path, self.model_config)
+            return backend
+        except Exception as e:
+            print(f"[backend load error] {e}\n{traceback.format_exc()}")
+            # If llama-cpp backend, try to print llama-server stderr if available
+            if hasattr(backend, 'process') and backend.process and backend.process.stderr:
+                try:
+                    err = backend.process.stderr.read().decode(errors='replace')
+                    print(f"[llama-server stderr]:\n{err}")
+                except Exception as ee:
+                    print(f"[llama-server stderr read error]: {ee}")
+            raise
 
     def _build_sampling_params(self, data: dict):
         # Returns a dict for llama-cpp, or SamplingParams for vLLM

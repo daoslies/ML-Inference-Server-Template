@@ -3,6 +3,7 @@ from vllm import SamplingParams
 import yaml
 import logging
 from llama_cpp import Llama
+import os
 
 class BaseLLMBackend:
     def load_model(self, model_path, model_config):
@@ -104,6 +105,9 @@ class LlamaCppBackend(BaseLLMBackend):
         )
 
     def load_model(self, model_path, model_config):
+        # Check if model_path exists before launching llama-server
+        if not os.path.isfile(model_path):
+            raise FileNotFoundError(f"Model file not found: {model_path}")
         self.unload_model()  # Clean up any existing process.
 
         n_ctx        = model_config.get('n_ctx', 4096)
