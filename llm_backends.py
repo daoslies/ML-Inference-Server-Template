@@ -111,10 +111,11 @@ class LlamaCppBackend(BaseLLMBackend):
         self.unload_model()  # Clean up any existing process.
 
         n_ctx        = model_config.get('n_ctx', 4096)
-        n_gpu_layers = model_config.get('n_gpu_layers', 0)
+        n_gpu_layers = model_config.get('n_gpu_layers', -1)
         port         = _get_config_value(
             "c.get('llama_cpp', {}).get('server_port', 28000)"
         )
+        lora_path    = model_config.get('lora_path')
 
         cmd = [
             self.server_bin,
@@ -123,7 +124,18 @@ class LlamaCppBackend(BaseLLMBackend):
             '--n-gpu-layers', str(n_gpu_layers),
             '--port',         str(port),
             '--host',         '127.0.0.1',
+            '--jinja',                                          # enable chat template
+            '--chat-template-kwargs', '{"enable_thinking":false}',
+            '--reasoning-budget', '0',                          # belt and braces
+            '--presence-penalty', '1.5',                        # stops repetition loops
+            '--temp', '0.6', 
+            '--top-k', '20', 
+            '--top-p', '0.95',
         ]
+        if lora_path:
+            if not os.path.isfile(lora_path):
+                raise FileNotFoundError(f"LoRA file not found: {lora_path}")
+            cmd += ['--lora', lora_path]
 
         self.process     = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
@@ -157,7 +169,7 @@ class LlamaCppBackend(BaseLLMBackend):
                 'n_predict':   sampling_params.get('max_tokens', 256),
                 'temperature': sampling_params.get('temperature', 0.3),
                 'top_p':       sampling_params.get('top_p', 0.95),
-                'stop':        sampling_params.get('stop', []),
+                'stop':        sampling_params.get('stop', ["</s>", "\n\n"]),  # Both .encode()
             }).encode()
 
             req = urllib.request.Request(

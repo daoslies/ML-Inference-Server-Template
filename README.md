@@ -32,11 +32,14 @@ alias ml="python ml.py"  # (optional, add to your .bashrc)
 Example usage:
 
 - `ml health` — check server status
-- `ml load Qwen/Qwen2.5-7B-Instruct` — load a model
+- `ml load <model_1.gguf>` — load a model
+- `ml load <model_1.gguf> --lora-path lora_out.gguf` — load a model with LoRA
 - `ml infer "Summarize this..."` — run inference
 - `ml batch "Prompt one" "Prompt two"` — batch inference
 - `ml extract "Alice and Bob met..." prompts.yaml` — extract names
 - `ml shell` — interactive REPL
+- `ml unload` — unload the currently loaded model
+- `ml info <model_1.gguf> <model_2_optional.gguf>` — show model info (GGUF only, optionally with LoRA)
 
 The CLI reads the port from `config.yaml` by default, and prints clean, colorized output.
 
@@ -77,6 +80,11 @@ curl -X POST http://localhost:{PORT}/load_model \
   -H "Content-Type: application/json" \
   -d '{"model_path":"Qwen/Qwen2.5-7B-Instruct"}'
 
+# 2) Load model (with LoRA)
+curl -X POST http://localhost:{PORT}/load_model \
+  -H "Content-Type: application/json" \
+  -d '{"model_path":"qwen3-4b-q8_0.gguf", "lora_path":"lora_out.gguf"}'
+
 # 3) Inference
 curl -X POST http://localhost:{PORT}/inference \
   -H "Content-Type: application/json" \
@@ -91,6 +99,18 @@ curl -X POST http://localhost:{PORT}/inference \
 curl -X POST http://localhost:{PORT}/extract_names \
   -H "Content-Type: application/json" \
   -d '{"text":"Alice and Bob...","prompts_path":"textflow/prompts.yaml"}'
+
+# 6) Unload model
+curl -X POST http://localhost:{PORT}/unload_model
+
+# 7) Model info
+# You can query model info for any GGUF model. Optionally include a LoRA adapter.
+# Example:
+curl -X POST http://localhost:{PORT}/model_info \
+  -H "Content-Type: application/json" \
+  -d '{"model_path":"Qwen3.5-9B.Q4_K_M.gguf"}'
+# Optionally add lora_path to the json:
+  -d '{"model_path":"Qwen3.5-9B.Q4_K_M.gguf", "lora_path":"lora_out.gguf"}'
 ```
 
 ### Python (requests)
@@ -108,6 +128,10 @@ print(resp.json())
 resp = requests.post(f"http://localhost:{PORT}/load_model", json={"model_path": "Qwen/Qwen2.5-7B-Instruct"})
 print(resp.json())
 
+# 2) Load model (with LoRA)
+resp = requests.post(f"http://localhost:{PORT}/load_model", json={"model_path": "qwen3-4b-q8_0.gguf", "lora_path": "lora_out.gguf"})
+print(resp.json())
+
 # 3) Inference
 resp = requests.post(f"http://localhost:{PORT}/inference", json={"prompt": "Summarize this...", "max_tokens": 150})
 print(resp.json())
@@ -119,6 +143,18 @@ print(resp.json())
 # 5) Extract names
 resp = requests.post(f"http://localhost:{PORT}/extract_names", json={"text": "Alice and Bob...", "prompts_path": "textflow/prompts.yaml"})
 print(resp.json())
+
+# 6) Unload model
+resp = requests.post(f"http://localhost:{PORT}/unload_model")
+print(resp.json())
+
+# 7) Model info
+# You can query model info for any GGUF model. Optionally include a LoRA adapter.
+resp = requests.post(f"http://localhost:{PORT}/model_info", json={"model_path": "Qwen3.5-9B.Q4_K_M.gguf"})
+print(resp.json()["stdout"])
+# Optionally add lora_path to the json:
+json={"model_path": "Qwen3.5-9B.Q4_K_M.gguf", "lora_path": "lora_out.gguf"}
+
 ```
 
 
@@ -142,3 +178,8 @@ print(resp.json())
 
 
 --- Hmmm, if you try and load a model and you run out of vram, there is currently no warning that that's what happened. The server just fails to load the model and doesn't give a clear error message.
+
+
+
+-- "unload" is, for whatever reason, not coming up as an option in the interactive tmux shell.
+    - it seems to work fine, but the option isn't being suggested to the user.

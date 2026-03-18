@@ -4,11 +4,28 @@ ml — a CLI for interacting with the ML inference server.
 
 Usage:
     ml health
+        Check server health and loaded model.
     ml load <model_path>
+        Load a model.
+
     ml infer <prompt> [--max-tokens N] [--temperature F]
+        Run inference on a single prompt.
+
     ml batch <prompt1> <prompt2> ... [--max-tokens N]
+        Run inference on multiple prompts.
+
     ml extract <text> <prompts_path>
+        Extract names from text.
+
     ml shell
+        Interactive REPL mode.
+
+    ml unload
+        Unload the currently loaded model.
+
+    ml info <model_1.gguf> <model_2_optional_.gguf>
+        Show model architecture info. 
+        use two model args to compare structures.
 """
 
 import sys
@@ -96,7 +113,10 @@ def cmd_health(base: str, _args) -> int:
 
 def cmd_load(base: str, args) -> int:
     print(f"  {c(DIM, 'Loading')} {args.model_path} …")
-    data = post(f"{base}/load_model", {"model_path": args.model_path})
+    payload = {"model_path": args.model_path}
+    if getattr(args, "lora_path", None):
+        payload["lora_path"] = args.lora_path
+    data = post(f"{base}/load_model", payload)
     print_ok(data.get("message") or "Model loaded.")
     return 0
 
@@ -138,6 +158,105 @@ def cmd_extract(base: str, args) -> int:
         print_response("Result", json.dumps(names, indent=2))
     return 0
 
+def cmd_unload(base: str, _args) -> int:
+    data = post(f"{base}/unload_model", {})
+    print_ok(data.get("message") or "Model unloaded.")
+    return 0
+
+def print_model_info_block(info, label_prefix=""):
+    print_response(f"{label_prefix}File", info.get("file", ""))
+    meta = info.get("metadata", {})
+    print(f"\n  {c(BOLD, f'{label_prefix}Metadata (LoRA-relevant fields):')}")
+    for k in sorted(meta):
+        if any(x in k for x in ['lora', 'adapter', 'training', 'general']):
+            print(f"    {k:30s}: {meta[k]}")
+    tensor_summary = info.get("tensor_summary", {})
+    print(f"\n  {c(BOLD, f'{label_prefix}Tensor patterns:')}")
+    for p, count in sorted(tensor_summary.get("patterns", {}).items()):
+        print(f"    {count:3d}x  {p}")
+    lora_info = info.get("lora_info", {})
+    print(f"\n  {c(BOLD, f'{label_prefix}Inferred LoRA ranks:')}")
+    ranks = lora_info.get('ranks')
+    if ranks and isinstance(ranks, dict):
+        for layer, rank in sorted(ranks.items()):
+            print(f"    {layer}: rank={rank}")
+    else:
+        for layer in lora_info.get("covered_layers", []):
+            print(f"    {layer}: rank={lora_info.get('rank')}")
+    if info.get("warnings"):
+        print(f"\n  {c(RED, f'{label_prefix}Warnings:')}")
+        for w in info["warnings"]:
+            print(f"    ⚠ {w}")
+    # If lora_adapter present, print its info as well
+    if "lora_adapter" in info:
+        print(f"\n  {c(BOLD+CYAN, f'{label_prefix}LoRA Adapter Info:')}")
+        lora = info["lora_adapter"]
+        print(f"    File: {lora.get('file','')}")
+        meta = lora.get("metadata", {})
+        print(f"    Metadata:")
+        for k in sorted(meta):
+            if any(x in k for x in ['lora', 'adapter', 'training', 'general']):
+                print(f"      {k:28s}: {meta[k]}")
+        tensor_summary = lora.get("tensor_summary", {})
+        print(f"    Tensor patterns:")
+        for p, count in sorted(tensor_summary.get("patterns", {}).items()):
+            print(f"      {count:3d}x  {p}")
+        lora_info = lora.get("lora_info", {})
+        print(f"    Inferred LoRA ranks:")
+        ranks = lora_info.get('ranks')
+        if ranks and isinstance(ranks, dict):
+            for layer, rank in sorted(ranks.items()):
+                print(f"      {layer}: rank={rank}")
+        else:
+            for layer in lora_info.get("covered_layers", []):
+                print(f"      {layer}: rank={lora_info.get('rank')}")
+        if lora.get("warnings"):
+            print(f"    {c(RED, 'Warnings:')}")
+            for w in lora["warnings"]:
+                print(f"      ⚠ {w}")
+
+
+def cmd_info(base: str, args) -> int:
+    payload = {"model_path": args.model_path}
+    if getattr(args, "lora_path", None):
+        payload["lora_path"] = args.lora_path
+    if getattr(args, "compare_path", None):
+        payload["compare_path"] = args.compare_path
+    if getattr(args, "json", False):
+        payload["json"] = True
+    data = post(f"{base}/model_info", payload)
+    if getattr(args, "json", False):
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return 0
+    if data.get("status") == "success":
+        info = data.get("info", {})
+        # Handle comparison response
+        if "file1" in info and "file2" in info:
+            print_model_info_block(info["file1"], label_prefix="Reference: ")
+            print_model_info_block(info["file2"], label_prefix="Yours:    ")
+            # Tensor shape comparison
+            if "tensor_shape_comparison" in info:
+                print(f"\n  {c(BOLD+YELLOW, 'Tensor shape comparison for blk.0.*:')}")
+                print(f"    {'Tensor':<45} {'Reference':>20} {'Yours':>20} {'Match':>8}  Info")
+                print("    " + "-" * 100)
+                for row in info["tensor_shape_comparison"]:
+                    a = row['reference']
+                    b = row['yours']
+                    if row.get('info'):
+                        match = f"✓ ({row['info']})" if row['match'] else f"✗ {row['info']}"
+                    else:
+                        match = "✓" if row['match'] else "✗ MISMATCH"
+                    print(f"    {row['tensor']:<45} {str(a):>20} {str(b):>20} {match:>12}")
+            return 0
+        # Single model info
+        print_model_info_block(info)
+        return 0
+    else:
+        print_error(data.get("error", "Unknown error"))
+        if data.get("traceback"):
+            print_warn(data["traceback"])
+        return 1
+
 # -------------------------------------------------------
 # REPL shell
 # -------------------------------------------------------
@@ -148,6 +267,8 @@ SHELL_HELP = f"""
     infer <prompt>  [--max-tokens N]  [--temperature F]
     batch <p1> <p2> ...  [--max-tokens N]
     extract <text> <prompts_path>
+    unload
+    info <model_path> [--lora-path <lora_path>]
     help
     exit
 """
@@ -208,6 +329,7 @@ def build_parser() -> argparse.ArgumentParser:
     # load
     p_load = sub.add_parser("load", help="Load a model.")
     p_load.add_argument("model_path", help="HuggingFace model path or local path.")
+    p_load.add_argument("--lora-path", help="Optional: Path to LoRA adapter (GGUF)", default=None)
 
     # infer
     p_infer = sub.add_parser("infer", help="Run inference on a single prompt.")
@@ -228,6 +350,16 @@ def build_parser() -> argparse.ArgumentParser:
     # shell
     sub.add_parser("shell", help="Interactive REPL mode.")
 
+    # unload
+    sub.add_parser("unload", help="Unload the currently loaded model.")
+
+    # info
+    p_info = sub.add_parser("info", help="Show model info (GGUF only).")
+    p_info.add_argument("model_path", help="Path to GGUF model file.")
+    p_info.add_argument("compare_path", nargs="?", help="Optional: Path to second GGUF file for comparison.")
+    p_info.add_argument("--lora-path", help="Optional: Path to LoRA adapter (GGUF)", default=None)
+    p_info.add_argument("--json", action="store_true", help="Output raw JSON from the server.")
+
     return parser
 
 COMMANDS = {
@@ -237,6 +369,8 @@ COMMANDS = {
     "batch":   cmd_batch,
     "extract": cmd_extract,
     "shell":   cmd_shell,
+    "unload":  cmd_unload,
+    "info":    cmd_info,
 }
 
 def _dispatch(argv: list[str], base: str) -> tuple[argparse.Namespace, int]:

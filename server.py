@@ -29,6 +29,9 @@ Quick curl examples:
       -H "Content-Type: application/json" \
       -d '{"text":"Alice and Bob...","prompts_path":"textflow/prompts.yaml"}'
 
+6) Unload model:
+    curl -X POST http://localhost:{PORT}/unload_model
+
 Quick Python requests examples:
 
 import requests
@@ -53,6 +56,10 @@ print(resp.json())
 resp = requests.post(f"http://localhost:{{PORT}}/extract_names", json={"text": "Alice and Bob...", "prompts_path": "textflow/prompts.yaml"})
 print(resp.json())
 
+# 6) Unload model
+resp = requests.post(f"http://localhost:{{PORT}}/unload_model")
+print(resp.json())
+
 Notes on load/unload vs llama.cpp version:
 - vLLM initialises the full model on /load_model and holds it in GPU memory.
 - /unload_model deletes the LLM object and flushes CUDA cache, but vLLM does
@@ -71,6 +78,7 @@ import torch
 import yaml
 import os
 from threading import Lock
+import shutil
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.yaml')
 
@@ -153,27 +161,42 @@ class LLMServer:
             if not data or 'model_path' not in data:
                 return jsonify({'error': 'model_path is required'}), 400
             model_path = data['model_path']
-            print(f"Loading model: {model_path}")
+            lora_path = data.get('lora_path')
+            print(f"Loading model: {model_path}" + (f" with LoRA: {lora_path}" if lora_path else ""))
             with self.model_lock:
-                # Only unload current model if new one loads successfully
                 backend = None
                 backend_name = None
                 error_msgs = []
-                try:
-                    backend = self._try_load_backend(VLLMBackend, model_path)
-                    backend_name = 'vllm'
-                except Exception as e:
-                    error_msgs.append(f"vLLM failed: {e}")
+                # Route to llama-cpp directly if .gguf, else try vLLM first
+                if model_path.lower().endswith('.gguf'):
                     try:
-                        backend = self._try_load_backend(LlamaCppBackend, model_path)
+                        model_config = dict(self.model_config)
+                        if lora_path:
+                            model_config['lora_path'] = lora_path
+                        backend = LlamaCppBackend()
+                        backend.load_model(model_path, model_config)
                         backend_name = 'llama-cpp'
-                    except Exception as e2:
-                        error_msgs.append(f"llama-cpp failed: {e2}")
-                        if not (os.path.exists(model_path) or '/' in model_path):
-                            code = 404
-                        else:
-                            code = 500
-                        return jsonify({'error': 'Both backends failed', 'details': error_msgs}), code
+                    except Exception as e:
+                        error_msgs.append(f"llama-cpp failed: {e}")
+                        code = 404 if not (os.path.exists(model_path) or '/' in model_path) else 500
+                        return jsonify({'error': 'llama-cpp failed', 'details': error_msgs}), code
+                else:
+                    try:
+                        backend = self._try_load_backend(VLLMBackend, model_path)
+                        backend_name = 'vllm'
+                    except Exception as e:
+                        error_msgs.append(f"vLLM failed: {e}")
+                        try:
+                            model_config = dict(self.model_config)
+                            if lora_path:
+                                model_config['lora_path'] = lora_path
+                            backend = LlamaCppBackend()
+                            backend.load_model(model_path, model_config)
+                            backend_name = 'llama-cpp'
+                        except Exception as e2:
+                            error_msgs.append(f"llama-cpp failed: {e2}")
+                            code = 404 if not (os.path.exists(model_path) or '/' in model_path) else 500
+                            return jsonify({'error': 'Both backends failed', 'details': error_msgs}), code
                 # Only here if new model loaded successfully
                 if self.current_backend is not None:
                     self.current_backend.unload_model()
@@ -181,6 +204,8 @@ class LLMServer:
                 self.current_backend_name = backend_name
                 self.current_model_path = model_path
                 msg = f"Model loaded with backend: {backend_name}"
+                if lora_path:
+                    msg += f" (LoRA: {lora_path})"
                 if error_msgs:
                     msg += f" (fallback used, errors: {error_msgs})"
                 return jsonify({
@@ -267,6 +292,38 @@ class LLMServer:
                 tb = traceback.format_exc()
                 print(f"[inference error] {e}\n{tb}")
                 return jsonify({'error': str(e), 'traceback': tb, 'backend': self.current_backend_name}), 500
+
+        @app.route('/model_info', methods=['POST'])
+        def model_info_endpoint():
+            data = request.get_json() or {}
+            model_path = data.get('model_path')
+            lora_path = data.get('lora_path')
+            compare_path = data.get('compare_path')
+            if not model_path:
+                return jsonify({'error': 'model_path is required'}), 400
+            if not model_path.lower().endswith('.gguf'):
+                return jsonify({'error': 'model_info only supported for GGUF models'}), 400
+            if not os.path.isfile(model_path):
+                return jsonify({'error': f'Model file not found: {model_path}'}), 404
+            try:
+                from gguf_inspector import inspect_gguf, inspect_gguf_compare
+                # If compare_path is provided, use inspect_gguf_compare for richer output
+                if compare_path:
+                    if not os.path.isfile(compare_path):
+                        return jsonify({'error': f'Compare file not found: {compare_path}'}), 404
+                    result = inspect_gguf_compare(model_path, compare_path, layer=0)
+                else:
+                    result = inspect_gguf(model_path)
+                    # If lora_path is provided, inspect it as well and merge info
+                    if lora_path:
+                        if not os.path.isfile(lora_path):
+                            return jsonify({'error': f'LoRA file not found: {lora_path}'}), 404
+                        lora_result = inspect_gguf(lora_path)
+                        result['lora_adapter'] = lora_result
+                return jsonify({'status': 'success', 'info': result})
+            except Exception as e:
+                import traceback
+                return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
     def load_prompts(self, yaml_path: str):
         with open(yaml_path, 'r') as f:
