@@ -3,5 +3,5 @@ pyyaml
 pytest
 requests
 #torch  vllm installs this for us.
-vllm
+vllm==0.20.1
 ## important blank line. Genuinly is, plz don't delete.
