@@ -268,9 +268,10 @@ EOF
 #   Pane 1 (right) — ml interactive shell
 tmux new-session -d -s "$TMUX_SESSION" -x "220" -y "50"
 
-# Left pane: run the server
+
+# Left pane: run the server with Gunicorn
 tmux send-keys -t "$TMUX_SESSION:0.0" \
-    "source '$VENV_DIR/bin/activate' && python3 '$PROJECT_DIR/server.py'" Enter
+    "source '$VENV_DIR/bin/activate' && gunicorn --bind 0.0.0.0:$PORT server:app" Enter
 
 # Split vertically (left/right), start the ml shell in the right pane
 tmux split-window -h -t "$TMUX_SESSION:0"

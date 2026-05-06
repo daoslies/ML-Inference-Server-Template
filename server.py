@@ -337,6 +337,10 @@ class LLMServer:
             threaded=True
         )
 
+
+# Expose app for Gunicorn
+app = LLMServer().app
+
 if __name__ == '__main__':
     server = LLMServer()
     server.run()

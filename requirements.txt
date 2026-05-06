@@ -4,4 +4,5 @@ pytest
 requests
 #torch  vllm installs this for us.
 vllm==0.20.1
+gunicorn
 ## important blank line. Genuinly is, plz don't delete.
